@@ -16,8 +16,31 @@
       font-family: sans-serif;
       display: flex;
       flex-direction: column;
-      height: 100dvh; /* スマホのアドレスバーを考慮した高さ */
+      height: 100dvh;
       overflow: hidden;
+    }
+    /* 上部設定バー */
+    #top-bar {
+      height: 52px;
+      background-color: rgba(17, 17, 17, 0.9);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 0 16px;
+      font-size: 13px;
+      z-index: 10;
+    }
+    .pill-btn {
+      background: #2a2a2a;
+      color: #fff;
+      border: 1px solid #444;
+      padding: 6px 12px;
+      border-radius: 16px;
+      font-size: 13px;
+      cursor: pointer;
+    }
+    .pill-btn:active {
+      background: #444;
     }
     #camera-container {
       position: relative;
@@ -32,7 +55,6 @@
       height: 100%;
       object-fit: cover;
     }
-    /* 撮影時のフラッシュ演出（無音なので視覚的に撮れたことを分かりやすくする） */
     #flash {
       position: absolute;
       inset: 0;
@@ -40,6 +62,19 @@
       opacity: 0;
       pointer-events: none;
       transition: opacity 0.15s ease-out;
+    }
+    /* 保存完了通知トースト */
+    #toast {
+      position: absolute;
+      bottom: 16px;
+      background: rgba(0, 0, 0, 0.75);
+      color: #fff;
+      padding: 6px 14px;
+      border-radius: 20px;
+      font-size: 12px;
+      opacity: 0;
+      transition: opacity 0.2s;
+      pointer-events: none;
     }
     #controls {
       height: 120px;
@@ -49,7 +84,6 @@
       align-items: center;
       padding: 0 20px;
     }
-    /* シャッターボタン */
     #shutter-btn {
       width: 72px;
       height: 72px;
@@ -62,7 +96,6 @@
       background-color: #ccc;
       transform: scale(0.95);
     }
-    /* カメラ切り替えボタン */
     #switch-btn {
       background: #333;
       color: #fff;
@@ -73,19 +106,26 @@
       cursor: pointer;
     }
     canvas {
-      display: none; /* 画像処理用なので画面には隠す */
+      display: none;
     }
   </style>
 </head>
 <body>
 
+  <!-- 画質・形式切り替えバー -->
+  <div id="top-bar">
+    <button id="quality-btn" class="pill-btn">画質: 標準 (1080p)</button>
+    <button id="format-btn" class="pill-btn">形式: WebP (軽量)</button>
+  </div>
+
   <div id="camera-container">
     <video id="video" autoplay playsinline></video>
     <div id="flash"></div>
+    <div id="toast"></div>
   </div>
 
   <div id="controls">
-    <div style="width: 80px;"></div> <!-- レイアウト調整用の空白 -->
+    <div style="width: 80px;"></div>
     <button id="shutter-btn" aria-label="撮影"></button>
     <button id="switch-btn">カメラ切替</button>
   </div>
@@ -97,25 +137,49 @@
     const canvas = document.getElementById('canvas');
     const shutterBtn = document.getElementById('shutter-btn');
     const switchBtn = document.getElementById('switch-btn');
+    const qualityBtn = document.getElementById('quality-btn');
+    const formatBtn = document.getElementById('format-btn');
     const flash = document.getElementById('flash');
+    const toast = document.getElementById('toast');
 
-    let currentFacingMode = 'environment'; // 'environment'=背面, 'user'=前面
+    let currentFacingMode = 'environment';
     let currentStream = null;
 
-    // カメラを起動する関数
+    // 画質プリセット（タップで順番に切り替え）
+    const qualityPresets = [
+      { label: '画質: 標準 (1080p)', width: 1920, height: 1080, quality: 0.85 },
+      { label: '画質: 高画質 (4K)', width: 3840, height: 2160, quality: 0.95 },
+      { label: '画質: 軽量 (720p)', width: 1280, height: 720,  quality: 0.70 }
+    ];
+    let qualityIndex = 0;
+
+    // ファイル形式プリセット（WebP / JPEG）
+    const formatPresets = [
+      { label: '形式: WebP (軽量)', mime: 'image/webp', ext: 'webp' },
+      { label: '形式: JPEG (互換)', mime: 'image/jpeg', ext: 'jpg' }
+    ];
+    let formatIndex = 0;
+
+    // 通知表示関数
+    function showToast(text) {
+      toast.textContent = text;
+      toast.style.opacity = '1';
+      setTimeout(() => { toast.style.opacity = '0'; }, 1800);
+    }
+
+    // カメラ起動関数
     async function startCamera(facingMode) {
-      // すでにカメラが動いていたら停止する
       if (currentStream) {
         currentStream.getTracks().forEach(track => track.stop());
       }
 
+      const preset = qualityPresets[qualityIndex];
       const constraints = {
         audio: false,
         video: {
           facingMode: facingMode,
-          // なるべく高画質（フルHD相当）をリクエスト
-          width: { ideal: 1920 },
-          height: { ideal: 1080 }
+          width: { ideal: preset.width },
+          height: { ideal: preset.height }
         }
       };
 
@@ -127,39 +191,54 @@
       }
     }
 
+    // 画質切り替えボタン
+    qualityBtn.addEventListener('click', () => {
+      qualityIndex = (qualityIndex + 1) % qualityPresets.length;
+      qualityBtn.textContent = qualityPresets[qualityIndex].label;
+      startCamera(currentFacingMode); // 解像度を反映させるためカメラを再取得
+    });
+
+    // 形式切り替えボタン
+    formatBtn.addEventListener('click', () => {
+      formatIndex = (formatIndex + 1) % formatPresets.length;
+      formatBtn.textContent = formatPresets[formatIndex].label;
+    });
+
     // 撮影処理
     shutterBtn.addEventListener('click', () => {
       if (!currentStream) return;
 
-      // 画面を一瞬白く光らせる演出
       flash.style.opacity = '0.8';
       setTimeout(() => { flash.style.opacity = '0'; }, 100);
 
-      // videoの実際の解像度に合わせてcanvasのサイズを設定
       canvas.width = video.videoWidth;
       canvas.height = video.videoHeight;
 
       const ctx = canvas.getContext('2d');
-      
-      // インカメラの場合は左右反転して保存する
       if (currentFacingMode === 'user') {
         ctx.translate(canvas.width, 0);
         ctx.scale(-1, 1);
       }
 
-      // 現在のフレームをcanvasに描画
       ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
-      // 画像をダウンロード（保存）
-      const dataUrl = canvas.toDataURL('image/jpeg', 0.92); // 画質92%のJPEG
+      const qPreset = qualityPresets[qualityIndex];
+      const fPreset = formatPresets[formatIndex];
+
+      // 指定された形式と圧縮率で書き出し
+      const dataUrl = canvas.toDataURL(fPreset.mime, qPreset.quality);
       const link = document.createElement('a');
       const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-      link.download = `photo_${timestamp}.jpg`;
+      link.download = `photo_${timestamp}.${fPreset.ext}`;
       link.href = dataUrl;
       link.click();
+
+      // おおよそのファイルサイズ（KB）を計算して画面に表示
+      const sizeKB = Math.round((dataUrl.length * 3 / 4) / 1024);
+      showToast(`保存完了: ${canvas.width}×${canvas.height} (${sizeKB} KB)`);
     });
 
-    // インカメラ・アウトカメラ切り替え
+    // カメラ切り替え
     switchBtn.addEventListener('click', () => {
       currentFacingMode = (currentFacingMode === 'environment') ? 'user' : 'environment';
       startCamera(currentFacingMode);
