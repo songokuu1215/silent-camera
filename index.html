@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>無音カメラ</title>
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+    body {
+      background-color: #000;
+      color: #fff;
+      font-family: sans-serif;
+      display: flex;
+      flex-direction: column;
+      height: 100dvh; /* スマホのアドレスバーを考慮した高さ */
+      overflow: hidden;
+    }
+    #camera-container {
+      position: relative;
+      flex: 1;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      overflow: hidden;
+    }
+    video {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+    /* 撮影時のフラッシュ演出（無音なので視覚的に撮れたことを分かりやすくする） */
+    #flash {
+      position: absolute;
+      inset: 0;
+      background: #fff;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.15s ease-out;
+    }
+    #controls {
+      height: 120px;
+      background-color: #111;
+      display: flex;
+      justify-content: space-around;
+      align-items: center;
+      padding: 0 20px;
+    }
+    /* シャッターボタン */
+    #shutter-btn {
+      width: 72px;
+      height: 72px;
+      border-radius: 50%;
+      background-color: #fff;
+      border: 4px solid #888;
+      cursor: pointer;
+    }
+    #shutter-btn:active {
+      background-color: #ccc;
+      transform: scale(0.95);
+    }
+    /* カメラ切り替えボタン */
+    #switch-btn {
+      background: #333;
+      color: #fff;
+      border: none;
+      padding: 10px 16px;
+      border-radius: 20px;
+      font-size: 14px;
+      cursor: pointer;
+    }
+    canvas {
+      display: none; /* 画像処理用なので画面には隠す */
+    }
+  </style>
+</head>
+<body>
+
+  <div id="camera-container">
+    <video id="video" autoplay playsinline></video>
+    <div id="flash"></div>
+  </div>
+
+  <div id="controls">
+    <div style="width: 80px;"></div> <!-- レイアウト調整用の空白 -->
+    <button id="shutter-btn" aria-label="撮影"></button>
+    <button id="switch-btn">カメラ切替</button>
+  </div>
+
+  <canvas id="canvas"></canvas>
+
+  <script>
+    const video = document.getElementById('video');
+    const canvas = document.getElementById('canvas');
+    const shutterBtn = document.getElementById('shutter-btn');
+    const switchBtn = document.getElementById('switch-btn');
+    const flash = document.getElementById('flash');
+
+    let currentFacingMode = 'environment'; // 'environment'=背面, 'user'=前面
+    let currentStream = null;
+
+    // カメラを起動する関数
+    async function startCamera(facingMode) {
+      // すでにカメラが動いていたら停止する
+      if (currentStream) {
+        currentStream.getTracks().forEach(track => track.stop());
+      }
+
+      const constraints = {
+        audio: false,
+        video: {
+          facingMode: facingMode,
+          // なるべく高画質（フルHD相当）をリクエスト
+          width: { ideal: 1920 },
+          height: { ideal: 1080 }
+        }
+      };
+
+      try {
+        currentStream = await navigator.mediaDevices.getUserMedia(constraints);
+        video.srcObject = currentStream;
+      } catch (err) {
+        alert('カメラの起動に失敗しました: ' + err.message);
+      }
+    }
+
+    // 撮影処理
+    shutterBtn.addEventListener('click', () => {
+      if (!currentStream) return;
+
+      // 画面を一瞬白く光らせる演出
+      flash.style.opacity = '0.8';
+      setTimeout(() => { flash.style.opacity = '0'; }, 100);
+
+      // videoの実際の解像度に合わせてcanvasのサイズを設定
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+
+      const ctx = canvas.getContext('2d');
+      
+      // インカメラの場合は左右反転して保存する
+      if (currentFacingMode === 'user') {
+        ctx.translate(canvas.width, 0);
+        ctx.scale(-1, 1);
+      }
+
+      // 現在のフレームをcanvasに描画
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+      // 画像をダウンロード（保存）
+      const dataUrl = canvas.toDataURL('image/jpeg', 0.92); // 画質92%のJPEG
+      const link = document.createElement('a');
+      const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+      link.download = `photo_${timestamp}.jpg`;
+      link.href = dataUrl;
+      link.click();
+    });
+
+    // インカメラ・アウトカメラ切り替え
+    switchBtn.addEventListener('click', () => {
+      currentFacingMode = (currentFacingMode === 'environment') ? 'user' : 'environment';
+      startCamera(currentFacingMode);
+    });
+
+    // 初回起動
+    startCamera(currentFacingMode);
+  </script>
+</body>
+</html>
