@@ -85,4 +85,280 @@
       font-size: 13px;
       font-weight: bold;
       min-width: 38px;
-      text
+      text-align: center;
+    }
+    #zoom-slider {
+      flex: 1;
+      accent-color: #fff;
+      height: 4px;
+    }
+    #zoom-reset {
+      background: #333;
+      color: #fff;
+      border: none;
+      padding: 4px 8px;
+      border-radius: 10px;
+      font-size: 11px;
+      cursor: pointer;
+    }
+    /* 保存完了通知トースト */
+    #toast {
+      position: absolute;
+      top: 16px;
+      background: rgba(0, 0, 0, 0.75);
+      color: #fff;
+      padding: 6px 14px;
+      border-radius: 20px;
+      font-size: 12px;
+      opacity: 0;
+      transition: opacity 0.2s;
+      pointer-events: none;
+      z-index: 10;
+    }
+    #controls {
+      height: 120px;
+      background-color: #111;
+      display: flex;
+      justify-content: space-around;
+      align-items: center;
+      padding: 0 20px;
+    }
+    #shutter-btn {
+      width: 72px;
+      height: 72px;
+      border-radius: 50%;
+      background-color: #fff;
+      border: 4px solid #888;
+      cursor: pointer;
+    }
+    #shutter-btn:active {
+      background-color: #ccc;
+      transform: scale(0.95);
+    }
+    #switch-btn {
+      background: #333;
+      color: #fff;
+      border: none;
+      padding: 10px 16px;
+      border-radius: 20px;
+      font-size: 14px;
+      cursor: pointer;
+    }
+    canvas {
+      display: none;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- 画質・形式切り替えバー -->
+  <div id="top-bar">
+    <button id="quality-btn" class="pill-btn">画質: 標準 (1080p)</button>
+    <button id="format-btn" class="pill-btn">形式: WebP (軽量)</button>
+  </div>
+
+  <div id="camera-container">
+    <video id="video" autoplay playsinline></video>
+    <div id="flash"></div>
+    <div id="toast"></div>
+
+    <!-- ズームスライダーUI -->
+    <div id="zoom-bar">
+      <span id="zoom-label">1.0x</span>
+      <input type="range" id="zoom-slider" min="1" max="5" step="0.1" value="1">
+      <button id="zoom-reset">1x</button>
+    </div>
+  </div>
+
+  <div id="controls">
+    <div style="width: 80px;"></div>
+    <button id="shutter-btn" aria-label="撮影"></button>
+    <button id="switch-btn">カメラ切替</button>
+  </div>
+
+  <canvas id="canvas"></canvas>
+
+  <script>
+    const video = document.getElementById('video');
+    const canvas = document.getElementById('canvas');
+    const shutterBtn = document.getElementById('shutter-btn');
+    const switchBtn = document.getElementById('switch-btn');
+    const qualityBtn = document.getElementById('quality-btn');
+    const formatBtn = document.getElementById('format-btn');
+    const zoomSlider = document.getElementById('zoom-slider');
+    const zoomLabel = document.getElementById('zoom-label');
+    const zoomReset = document.getElementById('zoom-reset');
+    const flash = document.getElementById('flash');
+    const toast = document.getElementById('toast');
+
+    let currentFacingMode = 'environment';
+    let currentStream = null;
+    let videoTrack = null;
+    let supportsHardwareZoom = false;
+    let currentZoom = 1.0;
+
+    // 画質プリセット
+    const qualityPresets = [
+      { label: '画質: 標準 (1080p)', width: 1920, height: 1080, quality: 0.85 },
+      { label: '画質: 高画質 (4K)', width: 3840, height: 2160, quality: 0.95 },
+      { label: '画質: 軽量 (720p)', width: 1280, height: 720,  quality: 0.70 }
+    ];
+    let qualityIndex = 0;
+
+    // ファイル形式プリセット
+    const formatPresets = [
+      { label: '形式: WebP (軽量)', mime: 'image/webp', ext: 'webp' },
+      { label: '形式: JPEG (互換)', mime: 'image/jpeg', ext: 'jpg' }
+    ];
+    let formatIndex = 0;
+
+    function showToast(text) {
+      toast.textContent = text;
+      toast.style.opacity = '1';
+      setTimeout(() => { toast.style.opacity = '0'; }, 1800);
+    }
+
+    // ズーム適用関数
+    async function applyZoom(zoomValue) {
+      currentZoom = parseFloat(zoomValue);
+      zoomLabel.textContent = currentZoom.toFixed(1) + 'x';
+      zoomSlider.value = currentZoom;
+
+      if (supportsHardwareZoom && videoTrack) {
+        try {
+          await videoTrack.applyConstraints({ advanced: [{ zoom: currentZoom }] });
+          video.style.transform = 'scale(1)';
+          return;
+        } catch (e) {
+          // ハードウェアズーム失敗時はデジタルズームへフォールバック
+          supportsHardwareZoom = false;
+        }
+      }
+      // デジタルズーム表示
+      video.style.transform = `scale(${currentZoom})`;
+    }
+
+    // カメラ起動関数
+    async function startCamera(facingMode) {
+      if (currentStream) {
+        currentStream.getTracks().forEach(track => track.stop());
+      }
+
+      const preset = qualityPresets[qualityIndex];
+      const constraints = {
+        audio: false,
+        video: {
+          facingMode: facingMode,
+          width: { ideal: preset.width },
+          height: { ideal: preset.height }
+        }
+      };
+
+      try {
+        currentStream = await navigator.mediaDevices.getUserMedia(constraints);
+        video.srcObject = currentStream;
+        videoTrack = currentStream.getVideoTracks()[0];
+
+        // カメラがハードウェアズームに対応しているかチェック
+        const capabilities = videoTrack.getCapabilities ? videoTrack.getCapabilities() : {};
+        if (capabilities.zoom) {
+          supportsHardwareZoom = true;
+          zoomSlider.min = capabilities.zoom.min || 1;
+          zoomSlider.max = Math.min(capabilities.zoom.max || 5, 8); // 最大8倍までに制限
+          zoomSlider.step = capabilities.zoom.step || 0.1;
+        } else {
+          supportsHardwareZoom = false;
+          zoomSlider.min = 1;
+          zoomSlider.max = 5;
+          zoomSlider.step = 0.1;
+        }
+
+        // カメラ切り替え・画質変更時はズームを1.0xにリセット
+        await applyZoom(1.0);
+      } catch (err) {
+        alert('カメラの起動に失敗しました: ' + err.message);
+      }
+    }
+
+    // ズームスライダー操作
+    zoomSlider.addEventListener('input', (e) => {
+      applyZoom(e.target.value);
+    });
+
+    // 1xリセットボタン
+    zoomReset.addEventListener('click', () => {
+      applyZoom(1.0);
+    });
+
+    // 画質切り替え
+    qualityBtn.addEventListener('click', () => {
+      qualityIndex = (qualityIndex + 1) % qualityPresets.length;
+      qualityBtn.textContent = qualityPresets[qualityIndex].label;
+      startCamera(currentFacingMode);
+    });
+
+    // 形式切り替え
+    formatBtn.addEventListener('click', () => {
+      formatIndex = (formatIndex + 1) % formatPresets.length;
+      formatBtn.textContent = formatPresets[formatIndex].label;
+    });
+
+    // 撮影処理
+    shutterBtn.addEventListener('click', () => {
+      if (!currentStream) return;
+
+      flash.style.opacity = '0.8';
+      setTimeout(() => { flash.style.opacity = '0'; }, 100);
+
+      const vw = video.videoWidth;
+      const vh = video.videoHeight;
+      canvas.width = vw;
+      canvas.height = vh;
+
+      const ctx = canvas.getContext('2d');
+      ctx.save();
+
+      if (currentFacingMode === 'user') {
+        ctx.translate(vw, 0);
+        ctx.scale(-1, 1);
+      }
+
+      if (!supportsHardwareZoom && currentZoom > 1.0) {
+        // デジタルズーム時は中央部分を切り抜いて描画
+        const cropW = vw / currentZoom;
+        const cropH = vh / currentZoom;
+        const cropX = (vw - cropW) / 2;
+        const cropY = (vh - cropH) / 2;
+        ctx.drawImage(video, cropX, cropY, cropW, cropH, 0, 0, vw, vh);
+      } else {
+        // ハードウェアズームまたは1.0x時はそのまま全体を描画
+        ctx.drawImage(video, 0, 0, vw, vh);
+      }
+
+      ctx.restore();
+
+      const qPreset = qualityPresets[qualityIndex];
+      const fPreset = formatPresets[formatIndex];
+
+      const dataUrl = canvas.toDataURL(fPreset.mime, qPreset.quality);
+      const link = document.createElement('a');
+      const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+      link.download = `photo_${timestamp}.${fPreset.ext}`;
+      link.href = dataUrl;
+      link.click();
+
+      const sizeKB = Math.round((dataUrl.length * 3 / 4) / 1024);
+      showToast(`保存完了: ${currentZoom.toFixed(1)}x / ${sizeKB} KB`);
+    });
+
+    // カメラ切り替え
+    switchBtn.addEventListener('click', () => {
+      currentFacingMode = (currentFacingMode === 'environment') ? 'user' : 'environment';
+      startCamera(currentFacingMode);
+    });
+
+    // 初回起動
+    startCamera(currentFacingMode);
+  </script>
+</body>
+</html>
